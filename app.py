@@ -97,9 +97,41 @@ def save_item(group_id, name, price, qty, sharable_qty, unit, photo, source, exp
     if sharable_qty < qty:
         keep_qty = int(qty - sharable_qty)
         claims[st.session_state.current_user['id']] = keep_qty
+    
+    item_id = str(uuid.uuid4())[:8]
+
+    # Handle Photo Persistence
+    photo_path = None
+    if photo:
+        # Check if it's an UploadedFile (has 'getbuffer') or existing path
+        if hasattr(photo, 'getbuffer'):
+            uploads_dir = os.path.join(BASE_DIR, "uploads")
+            if not os.path.exists(uploads_dir):
+                os.makedirs(uploads_dir)
+            
+            # Use item_id as filename to avoid collisions
+            # photo.name is the original filename
+            _, ext = os.path.splitext(photo.name)
+            # Default to .jpg if no extension found, though unlikely for image uploads
+            if not ext:
+                ext = ".jpg"
+                
+            filename = f"{item_id}{ext}"
+            filepath = os.path.join(uploads_dir, filename)
+            
+            with open(filepath, "wb") as f:
+                f.write(photo.getbuffer())
+            
+            # Save relative path so it works if the project folder is moved,
+            # but we need to join it with BASE_DIR when displaying if streamlit doesn't resolve relative to script.
+            # Streamlit usually resolves relative to cwd or script. 
+            # We'll stick to relative path "uploads/filename.ext".
+            photo_path = os.path.join("uploads", filename)
+        elif isinstance(photo, str):
+            photo_path = photo
 
     new_item = {
-        'id': str(uuid.uuid4())[:8],
+        'id': item_id,
         'group_id': group_id,
         'created_by': st.session_state.current_user['id'],
         'created_at': datetime.now(),
@@ -108,23 +140,29 @@ def save_item(group_id, name, price, qty, sharable_qty, unit, photo, source, exp
         'total_qty': int(qty),
         'sharable_qty': int(sharable_qty),
         'unit': unit,
-        'photo': photo, # Note: Photos won't persist well in JSON if they are bytes. Streamlit handles this in session but for JSON we skip bytes or need external storage.
+        'photo': photo_path, 
         'source': source,
         'expiration_date': expiration_date,
         'claims': claims,
         'comments': []
     }
-    # Clean photo for JSON storage (JSON cannot store file object)
-    # in a real app, upload to S3/Cloudinary and store URL.
-    # Here we just drop the photo object for persistence safety or keep if it's not bytes.
-    # Streamlit UploadedFile is not JSON serializable.
-    item_for_db = new_item.copy()
-    item_for_db['photo'] = None # Removing photo from DB persistence for now to avoid crash
     
-    st.session_state.shared_items.append(item_for_db)
+    st.session_state.shared_items.append(new_item)
     save_db(get_current_db_state())
 
 def delete_item(item_id):
+    # Try to clean up photo file if it exists
+    item_to_delete = next((i for i in st.session_state.shared_items if i['id'] == item_id), None)
+    if item_to_delete and item_to_delete.get('photo'):
+        photo_val = item_to_delete['photo']
+        if isinstance(photo_val, str):
+            full_path = os.path.join(BASE_DIR, photo_val)
+            if os.path.exists(full_path):
+                try:
+                    os.remove(full_path)
+                except Exception as e:
+                    print(f"Error deleting photo: {e}")
+
     st.session_state.shared_items = [i for i in st.session_state.shared_items if i['id'] != item_id]
     save_db(get_current_db_state())
     st.rerun()
@@ -365,7 +403,16 @@ if selected_group:
             
             with c1:
                 if item.get('photo'):
-                    st.image(item['photo'], use_column_width=True)
+                    # resolve path
+                    photo_val = item['photo']
+                    if isinstance(photo_val, str) and os.path.exists(os.path.join(BASE_DIR, photo_val)):
+                         st.image(os.path.join(BASE_DIR, photo_val), use_column_width=True)
+                    elif photo_val: # Fallback if it's still an object or link (though we are moving to paths)
+                        try:
+                            st.image(photo_val, use_column_width=True)
+                        except:
+                            st.caption("Image not available")
+
                 st.subheader(item['name'])
                 st.write(f"**${item['price']:.2f}** total • ${unit_price:.2f}/{item['unit']}")
                 
@@ -389,36 +436,40 @@ if selected_group:
                 # Show who claimed what
                 if item['claims']:
                     st.write("**Claims:**")
-                    for claim_uid, claim_qty in item['claims'].items():
-                        claim_user_name = st.session_state.users.get(claim_uid, "Unknown")
-                        st.text(f"- {claim_user_name}: {claim_qty} {item['unit']}")
-
+                    for uid, q in item['claims'].items():
+                        # We might not have the name cached locally if we joined late,
+                        # but in this mock everyone is in st.session_state.users
+                        uname = st.session_state.users.get(uid, "Unknown")
+                        st.caption(f"- {uname}: {q}")
+            
             with c2:
-                st.write(f"**You want: {my_claim}**")
-                b1, b2 = st.columns(2)
-                if b1.button("➖", key=f"d_{item['id']}"):
-                    toggle_claim(item['id'], -1)
-                if b2.button("➕", key=f"u_{item['id']}"):
-                    toggle_claim(item['id'], 1)
+                st.write(f"**My Share:** {my_claim} {item['unit']}")
+                st.write(f"**Cost:** ${my_cost:.2f}")
                 
-                if my_cost > 0:
-                    st.info(f"Owe: ${my_cost:.2f}")
-
-                # Delete Button (Only for Creator)
-                if item['created_by'] == user['id']:
-                    if st.button("🗑️ Delete", key=f"del_{item['id']}"):
-                        delete_item(item['id'])
-
-            # Comments Section
-            with st.expander(f"💬 Comments ({len(item.get('comments', []))})"):
-                for c in item.get('comments', []):
-                    c_user = st.session_state.users.get(c['user_id'], "Unknown")
-                    st.caption(f"**{c_user}:** {c['text']}")
+                # Claim Controls
+                col_minus, col_plus = st.columns(2)
+                with col_minus:
+                    if st.button("➖", key=f"minus_{item['id']}"):
+                        toggle_claim(item['id'], -1)
+                with col_plus:
+                    # User can only claim if there is remaining OR if they are claiming from 'sharable_qty' limit?
+                    # Simplified: Global limit is total_qty. 
+                    # Sharable limit is (total - creator_keep).
+                    # Actually logic inside toggle_claim handles limits.
+                    if st.button("➕", key=f"plus_{item['id']}"):
+                        toggle_claim(item['id'], 1)
                 
-                with st.form(key=f"comment_form_{item['id']}", clear_on_submit=True):
-                    new_comment = st.text_input("Write a comment...")
-                    if st.form_submit_button("Post"):
+                # Comments / Chat
+                st.divider()
+                # Use expander for comments to save space
+                with st.expander(f"💬 Comments ({len(item.get('comments', []))})"):
+                    for c in item.get('comments', []):
+                        u_name = st.session_state.users.get(c['user_id'], "Unknown")
+                        st.caption(f"**{u_name}**: {c['text']}")
+                    
+                    new_comment = st.text_input("Add comment", key=f"comm_{item['id']}")
+                    if st.button("Post", key=f"btn_comm_{item['id']}"):
                         if new_comment:
                             add_comment(item['id'], new_comment)
-
+                            
             st.divider()
