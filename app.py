@@ -1,25 +1,55 @@
 import streamlit as st
 import uuid
 import time
-from datetime import datetime
+import json
+import os
+from datetime import datetime, date
+
+# --- Persistent Storage ---
+DB_FILE = "freshsplit_db.json"
+
+def load_db():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, 'r') as f:
+            return json.load(f)
+    return {'users': {}, 'groups': [], 'shared_items': []}
+
+def save_db(data):
+    def json_serial(obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        raise TypeError(f"Type {type(obj)} not serializable")
+    
+    with open(DB_FILE, 'w') as f:
+        json.dump(data, f, default=json_serial, indent=4)
 
 # --- 1. State Management (Mock Database) ---
-if 'users' not in st.session_state:
-    st.session_state.users = {} # {id: name}
+# Always load fresh data from DB on script rerun to ensure sync between users
+db_data = load_db()
+st.session_state.users = db_data.get('users', {})
+st.session_state.groups = db_data.get('groups', [])
+st.session_state.shared_items = db_data.get('shared_items', [])
+
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
-if 'groups' not in st.session_state:
-    st.session_state.groups = [] # List of dicts
-if 'shared_items' not in st.session_state:
-    st.session_state.shared_items = [] # List of dicts
 if 'draft_items' not in st.session_state:
     st.session_state.draft_items = [] # List of dicts for batch upload
 
 # --- 2. Helper Functions ---
+def get_current_db_state():
+    return {
+        'users': st.session_state.users,
+        'groups': st.session_state.groups,
+        'shared_items': st.session_state.shared_items
+    }
+
 def login(name):
     user_id = str(uuid.uuid4())[:8]
+    # Update state
     st.session_state.users[user_id] = name
     st.session_state.current_user = {'id': user_id, 'name': name}
+    # Persist
+    save_db(get_current_db_state())
     st.rerun()
 
 def create_group(name):
@@ -30,17 +60,23 @@ def create_group(name):
         'members': [st.session_state.current_user['id']]
     }
     st.session_state.groups.append(new_group)
+    save_db(get_current_db_state())
     st.success(f"Group '{name}' created!")
     time.sleep(1)
     st.rerun()
 
 def join_group(invite_code):
+    # Reload DB to ensure we have the latest groups from other users
+    fresh_db = load_db()
+    st.session_state.groups = fresh_db.get('groups', [])
+    
     code = invite_code.strip().upper()
     found_group = next((g for g in st.session_state.groups if g['invite_code'] == code), None)
     
     if found_group:
         if st.session_state.current_user['id'] not in found_group['members']:
             found_group['members'].append(st.session_state.current_user['id'])
+            save_db({'users': fresh_db['users'], 'groups': st.session_state.groups, 'shared_items': fresh_db['shared_items']})
             st.success(f"Joined group '{found_group['name']}'!")
             time.sleep(1)
             st.rerun()
@@ -67,19 +103,32 @@ def save_item(group_id, name, price, qty, sharable_qty, unit, photo, source, exp
         'total_qty': int(qty),
         'sharable_qty': int(sharable_qty),
         'unit': unit,
-        'photo': photo,
+        'photo': photo, # Note: Photos won't persist well in JSON if they are bytes. Streamlit handles this in session but for JSON we skip bytes or need external storage.
         'source': source,
         'expiration_date': expiration_date,
         'claims': claims,
         'comments': []
     }
-    st.session_state.shared_items.append(new_item)
+    # Clean photo for JSON storage (JSON cannot store file object)
+    # in a real app, upload to S3/Cloudinary and store URL.
+    # Here we just drop the photo object for persistence safety or keep if it's not bytes.
+    # Streamlit UploadedFile is not JSON serializable.
+    item_for_db = new_item.copy()
+    item_for_db['photo'] = None # Removing photo from DB persistence for now to avoid crash
+    
+    st.session_state.shared_items.append(item_for_db)
+    save_db(get_current_db_state())
 
 def delete_item(item_id):
     st.session_state.shared_items = [i for i in st.session_state.shared_items if i['id'] != item_id]
+    save_db(get_current_db_state())
     st.rerun()
 
 def toggle_claim(item_id, delta):
+    # Reload items to ensure concurrency safety
+    fresh_db = load_db()
+    st.session_state.shared_items = fresh_db.get('shared_items', [])
+    
     for item in st.session_state.shared_items:
         if item['id'] == item_id:
             current_user_id = st.session_state.current_user['id']
@@ -112,9 +161,13 @@ def toggle_claim(item_id, delta):
             else:
                  item['claims'][current_user_id] = new_claim
             
+            save_db(get_current_db_state())
             st.rerun()
 
 def add_comment(item_id, text):
+    fresh_db = load_db()
+    st.session_state.shared_items = fresh_db.get('shared_items', [])
+    
     for item in st.session_state.shared_items:
         if item['id'] == item_id:
             if 'comments' not in item:
@@ -124,6 +177,7 @@ def add_comment(item_id, text):
                 'text': text,
                 'timestamp': datetime.now()
             })
+            save_db(get_current_db_state())
             st.rerun()
 
 # --- 3. UI - Authentication ---

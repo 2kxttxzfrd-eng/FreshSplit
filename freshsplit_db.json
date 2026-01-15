@@ -1,0 +1,18 @@
+{
+    "users": {
+        "168dcd1b": "Karen",
+        "7f472a29": "YL"
+    },
+    "groups": [
+        {
+            "id": "cf89db92",
+            "name": "sisters",
+            "invite_code": "A32BBE",
+            "members": [
+                "168dcd1b",
+                "7f472a29"
+            ]
+        }
+    ],
+    "shared_items": []
+}
