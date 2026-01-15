@@ -6,7 +6,9 @@ import os
 from datetime import datetime, date
 
 # --- Persistent Storage ---
-DB_FILE = "freshsplit_db.json"
+# Use absolute path to ensure DB is found regardless of where the script is run
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "freshsplit_db.json")
 
 def load_db():
     if os.path.exists(DB_FILE):
@@ -83,7 +85,10 @@ def join_group(invite_code):
         else:
             st.info("You are already a member of this group.")
     else:
-        st.error("Invalid invite code.")
+        # Debug helper: if we can't find it, show what we have (for prototype debugging only)
+        # In production this would be sensitive info.
+        available_codes = [g.get('invite_code') for g in st.session_state.groups]
+        st.error(f"Invalid invite code: '{code}'. (Debug: Available: {available_codes})")
 
 def save_item(group_id, name, price, qty, sharable_qty, unit, photo, source, expiration_date):
     
@@ -186,9 +191,14 @@ st.set_page_config(page_title="FreshSplit", page_icon="🍒", layout="centered")
 # Capture invite code from URL if present
 try:
     if "invite" in st.query_params:
-        st.session_state.pending_invite = st.query_params["invite"]
+        inv = st.query_params["invite"]
+        # Handle list if returned by older Streamlit versions
+        if isinstance(inv, list):
+             st.session_state.pending_invite = inv[0]
+        else:
+             st.session_state.pending_invite = inv
 except:
-    pass # Fallback for older streamlit versions if needed
+    pass # Fallback
 
 if not st.session_state.current_user:
     st.title("🍒 FreshSplit")
@@ -217,7 +227,8 @@ with st.sidebar.expander("Create New Group"):
 # Group Join in Sidebar
 with st.sidebar.expander("Join Group", expanded=bool(st.session_state.get('pending_invite'))):
     default_code = st.session_state.get('pending_invite', "")
-    invite_code_input = st.text_input("Invite Code", value=default_code)
+    # specific key ensures widget stability
+    invite_code_input = st.text_input("Invite Code", value=default_code, key="join_invite_code_input")
     if st.button("Join"):
         if invite_code_input:
             join_group(invite_code_input)
@@ -240,8 +251,8 @@ else:
 if selected_group:
     st.title(selected_group['name'])
     
-    st.info(f"👫 Invite friends to this group by sharing this link:")
-    st.code(f"http://localhost:8501/?invite={selected_group['invite_code']}", language="text")
+    st.info(f"👫 Invite Code:")
+    st.code(selected_group['invite_code'], language="text")
     
     # --- Balance Summary ---
     summary_items = [i for i in st.session_state.shared_items if i['group_id'] == selected_group['id']]

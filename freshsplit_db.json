@@ -1,7 +1,12 @@
 {
     "users": {
         "168dcd1b": "Karen",
-        "7f472a29": "YL"
+        "7f472a29": "YL",
+        "c269752b": "YL",
+        "04d55c19": "Karen ",
+        "3f654ec6": "joy",
+        "c5b8728d": "Karen",
+        "b7e90313": "Karen"
     },
     "groups": [
         {
@@ -11,6 +16,22 @@
             "members": [
                 "168dcd1b",
                 "7f472a29"
+            ]
+        },
+        {
+            "id": "a6a6c6a5",
+            "name": "3sisters",
+            "invite_code": "51ED45",
+            "members": [
+                "c5b8728d"
+            ]
+        },
+        {
+            "id": "64da55c4",
+            "name": "3sisters",
+            "invite_code": "05C976",
+            "members": [
+                "b7e90313"
             ]
         }
     ],
