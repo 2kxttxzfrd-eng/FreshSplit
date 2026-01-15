@@ -34,6 +34,21 @@ def create_group(name):
     time.sleep(1)
     st.rerun()
 
+def join_group(invite_code):
+    code = invite_code.strip().upper()
+    found_group = next((g for g in st.session_state.groups if g['invite_code'] == code), None)
+    
+    if found_group:
+        if st.session_state.current_user['id'] not in found_group['members']:
+            found_group['members'].append(st.session_state.current_user['id'])
+            st.success(f"Joined group '{found_group['name']}'!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.info("You are already a member of this group.")
+    else:
+        st.error("Invalid invite code.")
+
 def save_item(group_id, name, price, qty, sharable_qty, unit, photo, source, expiration_date):
     
     # Calculate initial claim (what the creator keeps)
@@ -138,6 +153,13 @@ with st.sidebar.expander("Create New Group"):
         if new_group_name:
             create_group(new_group_name)
 
+# Group Join in Sidebar
+with st.sidebar.expander("Join Group"):
+    invite_code_input = st.text_input("Invite Code")
+    if st.button("Join"):
+        if invite_code_input:
+            join_group(invite_code_input)
+
 # Group Selection
 my_groups = [g for g in st.session_state.groups if user['id'] in g['members']]
 selected_group = None
@@ -152,7 +174,9 @@ else:
 # --- 5. Group Detail View ---
 if selected_group:
     st.title(selected_group['name'])
-    st.caption(f"Invite Code: {selected_group['invite_code']}")
+    
+    st.info(f"👫 Invite friends to this group by sharing this code:")
+    st.code(selected_group['invite_code'], language="text")
     
     # --- Balance Summary ---
     summary_items = [i for i in st.session_state.shared_items if i['group_id'] == selected_group['id']]
@@ -265,7 +289,7 @@ if selected_group:
             
             with c1:
                 if item.get('photo'):
-                    st.image(item['photo'], use_container_width=True)
+                    st.image(item['photo'], use_column_width=True)
                 st.subheader(item['name'])
                 st.write(f"**${item['price']:.2f}** total • ${unit_price:.2f}/{item['unit']}")
                 
