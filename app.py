@@ -129,6 +129,13 @@ def add_comment(item_id, text):
 # --- 3. UI - Authentication ---
 st.set_page_config(page_title="FreshSplit", page_icon="🍒", layout="centered")
 
+# Capture invite code from URL if present
+try:
+    if "invite" in st.query_params:
+        st.session_state.pending_invite = st.query_params["invite"]
+except:
+    pass # Fallback for older streamlit versions if needed
+
 if not st.session_state.current_user:
     st.title("🍒 FreshSplit")
     st.write("Turn bulk shopping into shared savings.\nPost an item, friends claim their portion, and the app handles the split. Simple, fair, and stress-free.")
@@ -154,11 +161,15 @@ with st.sidebar.expander("Create New Group"):
             create_group(new_group_name)
 
 # Group Join in Sidebar
-with st.sidebar.expander("Join Group"):
-    invite_code_input = st.text_input("Invite Code")
+with st.sidebar.expander("Join Group", expanded=bool(st.session_state.get('pending_invite'))):
+    default_code = st.session_state.get('pending_invite', "")
+    invite_code_input = st.text_input("Invite Code", value=default_code)
     if st.button("Join"):
         if invite_code_input:
             join_group(invite_code_input)
+            # Clear pending invite after join attempt
+            if 'pending_invite' in st.session_state:
+                del st.session_state.pending_invite
 
 # Group Selection
 my_groups = [g for g in st.session_state.groups if user['id'] in g['members']]
@@ -175,8 +186,8 @@ else:
 if selected_group:
     st.title(selected_group['name'])
     
-    st.info(f"👫 Invite friends to this group by sharing this code:")
-    st.code(selected_group['invite_code'], language="text")
+    st.info(f"👫 Invite friends to this group by sharing this link:")
+    st.code(f"http://localhost:8501/?invite={selected_group['invite_code']}", language="text")
     
     # --- Balance Summary ---
     summary_items = [i for i in st.session_state.shared_items if i['group_id'] == selected_group['id']]
